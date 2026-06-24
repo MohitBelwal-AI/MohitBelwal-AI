@@ -1,16 +1,30 @@
-## Hi there 👋
+# 👋 Hi, I'm Mohit Belwal
 
-<!--
-**MohitBelwal-AI/MohitBelwal-AI** is a ✨ _special_ ✨ repository because its `README.md` (this file) appears on your GitHub profile.
+⚡ Electrical Engineer | 🤖 Aspiring Industrial AI/ML Engineer
 
-Here are some ideas to get you started:
+## 🛠️ My Skills
 
-- 🔭 I’m currently working on ...
-- 🌱 I’m currently learning ...
-- 👯 I’m looking to collaborate on ...
-- 🤔 I’m looking for help with ...
-- 💬 Ask me about ...
-- 📫 How to reach me: ...
-- 😄 Pronouns: ...
-- ⚡ Fun fact: ...
--->
+### Industrial Automation
+- PLC Programming (Ladder Logic, SFC, Functional block)
+- SCADA & HMI Development
+- Industrial Automation Projects
+
+### AI/ML (Currently Learning)
+- Python 🐍
+- Machine Learning
+- GenAI & LLMs
+- AWS Cloud ☁️
+
+## 🎯 My Goal
+Building the bridge between 
+Industrial Automation & Artificial Intelligence
+
+## 📊 Current Status
+- 🌱 Learning Python (Day 1 - 24 June 2026)
+- 🔭 Working on: Industrial AI Projects
+- 💼 Open to: Remote Work | 15+ LPA
+- 📍 Location: Delhi, India
+
+## 📫 Connect With Me
+- LinkedIn: Mohit Belwal
+- GitHub: MohitBelwal-AI
