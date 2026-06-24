@@ -1,0 +1,132 @@
+; ============================================================
+;  PROGRAM   : Motor Start-Stop with Seal-In Circuit
+;  PLC TYPE  : Generic IEC 61131-3 (Siemens S7 / Allen Bradley)
+;  Author    : Mohit Belwal
+;  Domain    : Industrial Motor Control Automation
+;  Concepts  : Normally Open (NO), Normally Closed (NC),
+;              Output Coil, Seal-In (Latching) Logic,
+;              Overload Protection
+; ============================================================
+
+; ─── I/O TAG TABLE ──────────────────────────────────────────
+;
+;  INPUT TAGS
+;  ─────────────────────────────────────────────────────────
+;  I0.0  →  PB_START       Push Button START  (NO, momentary)
+;  I0.1  →  PB_STOP        Push Button STOP   (NC, momentary)
+;  I0.2  →  OL_RELAY       Overload Relay     (NC contact)
+;                           Opens on motor overload → trips circuit
+;
+;  OUTPUT TAGS
+;  ─────────────────────────────────────────────────────────
+;  Q0.0  →  KM1_COIL       Main Contactor Coil  (energizes motor)
+;  Q0.1  →  RUN_LAMP       Green Pilot Lamp     (motor running)
+;  Q0.2  →  FAULT_LAMP     Red Fault Lamp       (overload tripped)
+;
+; ─── MEMORY / INTERNAL BITS ────────────────────────────────
+;  M0.0  →  MOTOR_RUNNING  Internal status flag
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 001 — Motor Start / Seal-In Logic
+;
+;  Power Rail (Left)
+;  |
+;  |----[ I0.0 ]----+----[ I0.1 ]----[ I0.2 ]----( Q0.0 )---|
+;  |   PB_START     |    PB_STOP      OL_RELAY    KM1_COIL   |
+;  |                |    (NC)         (NC)                    |
+;  |----[ Q0.0 ]----+                                        |
+;  |   KM1_COIL                                              |
+;  |   (Seal-In)                                             |
+;
+;  LOGIC EXPLANATION:
+;  • Pressing PB_START (I0.0 = ON) energises KM1_COIL (Q0.0)
+;  • Q0.0 contact in parallel with PB_START → "seals in" the coil
+;    so motor keeps running after START button is released
+;  • Pressing PB_STOP (I0.1 = OFF) breaks the rung → motor stops
+;  • Overload trip (I0.2 = OFF) also breaks the rung → safe stop
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 002 — Motor Running Status Flag
+;
+;  |----[ Q0.0 ]-----------------------------------( M0.0 )---|
+;  |   KM1_COIL                               MOTOR_RUNNING  |
+;
+;  LOGIC: Internal flag M0.0 mirrors the contactor state.
+;         Used by HMI / SCADA to display motor status.
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 003 — Green RUN Lamp
+;
+;  |----[ M0.0 ]-----------------------------------( Q0.1 )---|
+;  |  MOTOR_RUNNING                              RUN_LAMP     |
+;
+;  LOGIC: Green lamp ON when motor is running.
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 004 — Red FAULT Lamp (Overload Trip)
+;
+;  |----[/I0.2 ]-----------------------------------( Q0.2 )---|
+;  |   OL_RELAY                               FAULT_LAMP     |
+;  |   (NC → shown as inverted / NOT contact)               |
+;
+;  LOGIC EXPLANATION:
+;  • I0.2 is a NC overload relay contact.
+;  • Under normal condition  : I0.2 = 1 → [/I0.2] = 0 → FAULT_LAMP OFF
+;  • Under overload condition : I0.2 = 0 → [/I0.2] = 1 → FAULT_LAMP ON
+;  • Red lamp gives operator immediate visual alarm.
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  TRUTH TABLE — Functional Verification
+;
+;  ┌──────────┬─────────┬──────────┬──────────┬───────────┬───────────┐
+;  │ PB_START │ PB_STOP │ OL_RELAY │ KM1_COIL │  RUN_LAMP │ FAULT_LAMP│
+;  │  I0.0    │  I0.1   │  I0.2    │   Q0.0   │   Q0.1    │   Q0.2   │
+;  ├──────────┼─────────┼──────────┼──────────┼───────────┼───────────┤
+;  │    0     │    1    │    1     │    0     │     0     │     0    │ ← Idle
+;  │    1     │    1    │    1     │    1     │     1     │     0    │ ← Starting
+;  │    0     │    1    │    1     │    1     │     1     │     0    │ ← Running (seal-in)
+;  │    0     │    0    │    1     │    0     │     0     │     0    │ ← STOP pressed
+;  │    0     │    1    │    0     │    0     │     0     │     1    │ ← OVERLOAD TRIP
+;  └──────────┴─────────┴──────────┴──────────┴───────────┴───────────┘
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  WIRING NOTES (for panel documentation)
+;
+;  • PB_START wired to I0.0 terminal — NO contact, momentary
+;  • PB_STOP  wired to I0.1 terminal — NC contact, momentary
+;  • OL Relay NC contact wired to I0.2 terminal
+;  • KM1 main contactor coil wired to Q0.0 terminal (via relay if 230V)
+;  • Green lamp wired to Q0.1 terminal
+;  • Red lamp   wired to Q0.2 terminal
+;  • Common 24V DC supply for PLC I/O rail
+;
+; ─── REAL-WORLD UPGRADES (Future Rungs to Add) ─────────────
+;
+;  → Rung 005 : Add Timer (TON) for Star-Delta starter
+;  → Rung 006 : Emergency Stop (E-Stop) with Safety relay
+;  → Rung 007 : Remote START/STOP from SCADA via Modbus bit
+;  → Rung 008 : Run-hour counter using CTU (Count Up)
+;  → Rung 009 : Alarm annunciator with ACK button
+;
+; ─── GITHUB NOTES ──────────────────────────────────────────
+;
+;  Simulate this in:
+;  • OpenPLC Editor (free, IEC 61131-3 compliant)
+;  • CODESYS (free tier)
+;  • Siemens TIA Portal (if available)
+;
+;  To simulate:
+;  1. Create new Ladder Logic project
+;  2. Define tags from I/O Table above
+;  3. Enter rungs as described
+;  4. Run simulation and toggle I0.0 / I0.1 / I0.2
+;
+; ============================================================
+;  END OF PROGRAM — Day 01 | Motor Start-Stop | Mohit Belwal
+; ============================================================
