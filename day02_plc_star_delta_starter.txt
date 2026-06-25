@@ -1,0 +1,176 @@
+; ============================================================
+;  PROGRAM   : Star-Delta Motor Starter with Timer (TON)
+;  PLC TYPE  : Generic IEC 61131-3 (Siemens S7 / Allen Bradley)
+;  Author    : Mohit Belwal
+;  Domain    : Industrial Motor Control Automation
+;  Concepts  : TON Timer, Sequencing Logic, Interlock,
+;              Multiple Contactors, Auto Transition
+; ============================================================
+
+; ─── WHY STAR-DELTA? ────────────────────────────────────────
+;
+;  Large motors (>5 kW) draw 6-8x full load current at start.
+;  Star-Delta reduces starting current to ~33% of DOL start.
+;
+;  SEQUENCE:
+;  Step 1 → Motor starts in STAR    (low voltage across winding)
+;  Step 2 → After 5-10 seconds      (timer counts)
+;  Step 3 → Auto switch to DELTA    (full voltage, full speed)
+;
+; ─── I/O TAG TABLE ──────────────────────────────────────────
+;
+;  INPUT TAGS
+;  ─────────────────────────────────────────────────────────
+;  I0.0  →  PB_START        Push Button START   (NO, momentary)
+;  I0.1  →  PB_STOP         Push Button STOP    (NC, momentary)
+;  I0.2  →  OL_RELAY        Overload Relay      (NC contact)
+;
+;  OUTPUT TAGS
+;  ─────────────────────────────────────────────────────────
+;  Q0.0  →  KM_MAIN         Main Contactor      (always ON when running)
+;  Q0.1  →  KM_STAR         Star Contactor      (ON during start phase)
+;  Q0.2  →  KM_DELTA        Delta Contactor     (ON after timer done)
+;  Q0.3  →  RUN_LAMP        Green Lamp          (motor running)
+;  Q0.4  →  STAR_LAMP       Yellow Lamp         (star mode active)
+;  Q0.5  →  DELTA_LAMP      Blue Lamp           (delta mode active)
+;  Q0.6  →  FAULT_LAMP      Red Lamp            (overload fault)
+;
+;  TIMER
+;  ─────────────────────────────────────────────────────────
+;  T1    →  STAR_TIMER      TON, Preset = 8 seconds
+;                           Counts while motor runs in STAR
+;                           On timeout → switches to DELTA
+;
+;  MEMORY BITS
+;  ─────────────────────────────────────────────────────────
+;  M0.0  →  MOTOR_ON        Motor running flag
+;  M0.1  →  STAR_MODE       Star phase active
+;  M0.2  →  DELTA_MODE      Delta phase active
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 001 — Main Contactor (KM_MAIN) with Seal-In
+;
+;  |----[ I0.0 ]----+----[ I0.1 ]----[ I0.2 ]----( Q0.0 )---|
+;  |   PB_START     |    PB_STOP      OL_RELAY    KM_MAIN    |
+;  |                |    (NC)         (NC)                    |
+;  |----[ Q0.0 ]----+                                        |
+;  |   KM_MAIN                                               |
+;  |   (Seal-In)                                             |
+;
+;  LOGIC: Same seal-in as Day 01. Main contactor stays ON
+;         throughout both STAR and DELTA phases.
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 002 — Motor Running Flag
+;
+;  |----[ Q0.0 ]-----------------------------------( M0.0 )---|
+;  |   KM_MAIN                               MOTOR_RUNNING   |
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 003 — Star Contactor (KM_STAR)
+;
+;  |----[ M0.0 ]----[ T1/DN ]------------------( Q0.1 )------|
+;  |  MOTOR_ON      TIMER DONE                  KM_STAR      |
+;  |                (NC — open when timer done)              |
+;
+;  LOGIC:
+;  • When motor starts (M0.0 = ON) and timer NOT done → KM_STAR ON
+;  • When timer completes (T1/DN = ON) → T1/DN NC opens → KM_STAR OFF
+;  • Motor transitions from STAR to DELTA automatically
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 004 — Star Timer (TON — T1)
+;
+;  |----[ M0.0 ]---------------------------( TON T1 PT=8s )--|
+;  |  MOTOR_ON                               STAR_TIMER      |
+;
+;  LOGIC:
+;  • Timer starts counting when motor turns ON
+;  • After 8 seconds → T1/DN bit goes HIGH
+;  • This triggers transition from STAR → DELTA
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 005 — Delta Contactor (KM_DELTA)
+;
+;  |----[ M0.0 ]----[ T1/DN ]----[ Q0.1 ]------( Q0.2 )-----|
+;  |  MOTOR_ON      TIMER DONE    KM_STAR        KM_DELTA    |
+;  |                (NO)          (NC — Interlock)           |
+;
+;  LOGIC:
+;  • Timer done (T1/DN = ON) → enables DELTA
+;  • KM_STAR NC interlock → STAR and DELTA can NEVER be ON together
+;    (short circuit prevention — critical safety feature!)
+;  • KM_DELTA energises → motor now runs at full voltage
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 006 — Indicator Lamps
+;
+;  Green  RUN Lamp   : |----[ M0.0 ]-----------( Q0.3 )------|
+;  Yellow STAR Lamp  : |----[ Q0.1 ]-----------( Q0.4 )------|
+;  Blue  DELTA Lamp  : |----[ Q0.2 ]-----------( Q0.5 )------|
+;  Red   FAULT Lamp  : |----[/I0.2 ]-----------( Q0.6 )------|
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  TIMING DIAGRAM
+;
+;  Time  →    0s         8s
+;             |           |
+;  KM_MAIN    |███████████████████████|  (always ON)
+;  KM_STAR    |████████████|            (0s to 8s)
+;  KM_DELTA                |████████|  (8s onwards)
+;  STAR_LAMP  |████████████|
+;  DELTA_LAMP              |████████|
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  SEQUENCE OF OPERATION (Step by Step)
+;
+;  1. Press PB_START
+;  2. KM_MAIN energises → seals in
+;  3. KM_STAR energises → motor winds in STAR configuration
+;  4. Star Timer T1 starts counting (0 to 8 seconds)
+;  5. At t = 8s → T1 done → KM_STAR de-energises
+;  6. KM_DELTA energises → motor switches to DELTA
+;  7. Motor now runs at full rated voltage and speed
+;  8. Press PB_STOP → KM_MAIN drops → all contactors OFF
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  TRUTH TABLE
+;
+;  ┌────────┬──────────┬──────────┬──────────┬───────────┐
+;  │ Phase  │ KM_MAIN  │ KM_STAR  │ KM_DELTA │  T1 Done  │
+;  ├────────┼──────────┼──────────┼──────────┼───────────┤
+;  │ Idle   │    0     │    0     │    0     │     0     │
+;  │ STAR   │    1     │    1     │    0     │     0     │
+;  │ Trans. │    1     │    0     │    0     │     1     │
+;  │ DELTA  │    1     │    0     │    1     │     1     │
+;  │ STOP   │    0     │    0     │    0     │     0     │
+;  └────────┴──────────┴──────────┴──────────┴───────────┘
+;
+;  NOTE: Transition phase is few milliseconds — both contactors
+;        OFF briefly to prevent short circuit.
+;
+; ─── REAL-WORLD UPGRADES (Future Rungs) ────────────────────
+;
+;  → Add transition relay (50ms delay between STAR off & DELTA on)
+;  → Add current monitoring via CT for auto-trip
+;  → SCADA integration via Modbus — read T1 elapsed time on HMI
+;  → Add speed feedback from tachometer for smart transition
+;
+; ─── SIMULATE IN ───────────────────────────────────────────
+;
+;  OpenPLC Editor or CODESYS (free)
+;  Set TON timer preset = T#8S
+;  Toggle I0.0 and watch automatic STAR → DELTA transition
+;
+; ============================================================
+;  END OF PROGRAM — Day 02 | Star-Delta Starter | Mohit Belwal
+; ============================================================
