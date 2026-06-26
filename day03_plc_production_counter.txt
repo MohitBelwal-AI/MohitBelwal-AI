@@ -1,0 +1,158 @@
+; ============================================================
+;  PROGRAM   : Production Parts Counter with Batch Control
+;  PLC TYPE  : Generic IEC 61131-3 (Siemens S7 / Allen Bradley)
+;  Author    : Mohit Belwal
+;  Domain    : Industrial Automation & Manufacturing
+;  Concepts  : CTU (Count Up), CTD (Count Down),
+;              Counter Reset, Batch Complete Logic,
+;              Conveyor Control with Counting
+; ============================================================
+
+; ─── REAL WORLD USE CASE ────────────────────────────────────
+;
+;  A conveyor belt moves manufactured parts.
+;  A proximity sensor counts each part passing.
+;  After 100 parts → Batch complete → Conveyor stops.
+;  Operator resets → Next batch starts.
+;
+; ─── I/O TAG TABLE ──────────────────────────────────────────
+;
+;  INPUT TAGS
+;  ─────────────────────────────────────────────────────────
+;  I0.0  →  PB_START         Start conveyor (NO, momentary)
+;  I0.1  →  PB_STOP          Stop conveyor  (NC, momentary)
+;  I0.2  →  PROX_SENSOR      Proximity sensor — detects each part
+;                             Gives 1 pulse per part passing
+;  I0.3  →  PB_RESET         Reset counter   (NO, momentary)
+;  I0.4  →  OL_RELAY         Overload relay  (NC)
+;
+;  OUTPUT TAGS
+;  ─────────────────────────────────────────────────────────
+;  Q0.0  →  CONVEYOR_MOTOR   Conveyor belt motor
+;  Q0.1  →  RUN_LAMP         Green lamp  — conveyor running
+;  Q0.2  →  BATCH_LAMP       Blue lamp   — batch complete
+;  Q0.3  →  FAULT_LAMP       Red lamp    — overload fault
+;  Q0.4  →  BUZZER           Buzzer      — batch complete alarm
+;
+;  COUNTERS
+;  ─────────────────────────────────────────────────────────
+;  C1    →  PART_COUNTER     CTU (Count Up), Preset = 100
+;                            Counts each part detected by sensor
+;                            C1/DN goes HIGH when count = 100
+;
+;  MEMORY BITS
+;  ─────────────────────────────────────────────────────────
+;  M0.0  →  CONVEYOR_ON      Conveyor running flag
+;  M0.1  →  BATCH_DONE       Batch of 100 parts complete
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 001 — Conveyor Motor Start/Stop with Seal-In
+;                    (Conveyor stops automatically on batch done)
+;
+;  |--[ I0.0 ]--+--[ I0.1 ]--[ I0.4 ]--[/M0.1]--( Q0.0 )--|
+;  |  PB_START  |  PB_STOP   OL_RELAY  BATCH_DONE CONVEYOR  |
+;  |            |   (NC)      (NC)      (NC)                 |
+;  |--[ Q0.0 ]--+                                           |
+;  |  CONVEYOR                                              |
+;  |  (Seal-In)                                             |
+;
+;  LOGIC:
+;  • START pressed → Conveyor runs (seal-in)
+;  • STOP pressed  → Conveyor stops
+;  • Overload trip → Conveyor stops (safety)
+;  • Batch done (M0.1 = ON) → [/M0.1] opens → Conveyor AUTO STOPS
+;    This is the key addition vs Day 01!
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 002 — Conveyor Running Flag
+;
+;  |----[ Q0.0 ]----------------------------------( M0.0 )---|
+;  |  CONVEYOR_MOTOR                         CONVEYOR_ON     |
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 003 — Part Counter (CTU)
+;
+;  |----[ I0.2 ]----[ M0.0 ]---------( CTU C1 PV=100 )------|
+;  |  PROX_SENSOR   CONVEYOR_ON        PART_COUNTER          |
+;
+;  LOGIC:
+;  • Each time PROX_SENSOR pulses (part detected) AND
+;    conveyor is running → Counter C1 increments by 1
+;  • At C1.ACC = 100 → C1/DN bit goes HIGH
+;  • Counter does NOT count if conveyor is stopped
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 004 — Batch Complete Flag
+;
+;  |----[ C1/DN ]----------------------------------( M0.1 )--|
+;  |  COUNTER DONE                            BATCH_DONE     |
+;
+;  LOGIC: When 100 parts counted → M0.1 goes HIGH
+;         This also stops conveyor via Rung 001
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 005 — Counter Reset
+;
+;  |----[ I0.3 ]-----------------------------------( RES C1 )-|
+;  |  PB_RESET                                  RESET C1     |
+;
+;  |----[ I0.3 ]-----------------------------------( RES M0.1)|
+;  |  PB_RESET                                BATCH_DONE CLR |
+;
+;  LOGIC:
+;  • Operator presses RESET → C1 accumulator = 0
+;  • BATCH_DONE flag clears → Conveyor can start again
+;  • Next batch of 100 parts begins fresh
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 006 — Indicator Lamps & Buzzer
+;
+;  Green RUN Lamp    : |----[ M0.0 ]-----------( Q0.1 )------|
+;  Blue BATCH Lamp   : |----[ M0.1 ]-----------( Q0.2 )------|
+;  Red FAULT Lamp    : |----[/I0.4 ]-----------( Q0.3 )------|
+;  Buzzer (5s pulse) : |----[ M0.1 ]-----------( Q0.4 )------|
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  COUNTER OPERATION EXAMPLE
+;
+;  Part #  │ C1.ACC │ C1/DN │ Conveyor │ Batch Lamp
+;  ────────┼────────┼───────┼──────────┼───────────
+;    1     │   1    │   0   │   ON     │   OFF
+;   25     │  25    │   0   │   ON     │   OFF
+;   50     │  50    │   0   │   ON     │   OFF
+;   99     │  99    │   0   │   ON     │   OFF
+;  100     │  100   │   1   │  AUTO    │   ON  🔵
+;          │        │       │  STOP    │
+;  RESET   │   0    │   0   │   OFF    │   OFF
+;  START   │   0    │   0   │   ON     │   OFF  (new batch)
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  CTU vs CTD — When to Use
+;
+;  CTU (Count Up)   → Count parts produced, cycles completed
+;                     Starts from 0, goes UP to preset
+;                     Used here: count 0 → 100
+;
+;  CTD (Count Down) → Count remaining items in stock/bin
+;                     Starts from preset, goes DOWN to 0
+;                     Example: 500 bottles in bin, count down to 0
+;
+; ─── REAL-WORLD UPGRADES (Future Rungs) ────────────────────
+;
+;  → Add TON timer — buzzer ON for only 3 seconds on batch done
+;  → Add total production counter (counts batches completed)
+;  → Add SCADA integration — send C1.ACC value via Modbus
+;  → Add reject counter — separate sensor for defective parts
+;  → HMI display — show live count on screen
+;
+; ============================================================
+;  END OF PROGRAM — Day 03 | Production Counter | Mohit Belwal
+; ============================================================
