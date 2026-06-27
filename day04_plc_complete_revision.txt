@@ -1,0 +1,185 @@
+; ============================================================
+;  PROGRAM   : Complete Motor Control System (Revision Day)
+;  PLC TYPE  : Generic IEC 61131-3 (Siemens S7 / Allen Bradley)
+;  Author    : Mohit Belwal
+;  Domain    : Industrial Motor Control Automation
+;  Concepts  : REVISION — Seal-In (Day 1), TON Timer (Day 2),
+;              CTU Counter (Day 3) — All combined in one program
+;  Goal      : A motor that starts, runs Star-Delta, counts
+;              run cycles, and auto-stops after 5 cycles
+; ============================================================
+
+; ─── REAL WORLD USE CASE ────────────────────────────────────
+;
+;  A pump motor runs in a water treatment plant.
+;  It starts in Star-Delta (Day 2 concept).
+;  Every start = 1 cycle counted (Day 3 concept).
+;  After 5 cycles → maintenance alert → motor locked out.
+;  Maintenance team resets → motor available again.
+;
+; ─── I/O TAG TABLE ──────────────────────────────────────────
+;
+;  INPUTS
+;  ─────────────────────────────────────────────────────────
+;  I0.0  →  PB_START         Start push button    (NO)
+;  I0.1  →  PB_STOP          Stop push button     (NC)
+;  I0.2  →  OL_RELAY         Overload relay       (NC)
+;  I0.3  →  PB_RESET         Maintenance reset    (NO)
+;
+;  OUTPUTS
+;  ─────────────────────────────────────────────────────────
+;  Q0.0  →  KM_MAIN          Main contactor
+;  Q0.1  →  KM_STAR          Star contactor
+;  Q0.2  →  KM_DELTA         Delta contactor
+;  Q0.3  →  RUN_LAMP         Green lamp  — running
+;  Q0.4  →  STAR_LAMP        Yellow lamp — star mode
+;  Q0.5  →  DELTA_LAMP       Blue lamp   — delta mode
+;  Q0.6  →  MAINT_LAMP       Orange lamp — maintenance due
+;  Q0.7  →  FAULT_LAMP       Red lamp    — overload
+;
+;  TIMERS
+;  ─────────────────────────────────────────────────────────
+;  T1    →  STAR_TIMER       TON, PT = 8s  (Star→Delta transition)
+;
+;  COUNTERS
+;  ─────────────────────────────────────────────────────────
+;  C1    →  RUN_COUNTER      CTU, PV = 5   (counts motor starts)
+;                            At 5 starts → maintenance required
+;
+;  MEMORY BITS
+;  ─────────────────────────────────────────────────────────
+;  M0.0  →  MOTOR_ON         Motor running flag
+;  M0.1  →  MAINT_REQUIRED   Maintenance required flag
+;  M0.2  →  START_PULSE      One-shot pulse on start (for counter)
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 001 — Main Contactor with Maintenance Lockout
+;                    (Day 1 Seal-In + new MAINT lockout)
+;
+;  |-[ I0.0 ]-+--[ I0.1 ]--[ I0.2 ]--[/M0.1]--( Q0.0 )---|
+;  | PB_START |  PB_STOP   OL_RELAY  MAINT_REQ  KM_MAIN   |
+;  |          |   (NC)      (NC)       (NC)                 |
+;  |-[ Q0.0 ]-+                                            |
+;  | KM_MAIN                                               |
+;  | (Seal-In)                                             |
+;
+;  LOGIC:
+;  • Same seal-in as Day 01
+;  • Extra condition: [/M0.1] — if maintenance required,
+;    motor CANNOT start until reset by maintenance team
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 002 — Motor Running Flag
+;
+;  |----[ Q0.0 ]----------------------------------( M0.0 )--|
+;  |  KM_MAIN                               MOTOR_RUNNING  |
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 003 — Star Contactor (Day 2 TON Timer)
+;
+;  |----[ M0.0 ]----[/T1/DN]--------------------( Q0.1 )--|
+;  |  MOTOR_ON      TIMER NOT                   KM_STAR   |
+;  |                DONE (NC)                             |
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 004 — Star Timer TON (Day 2)
+;
+;  |----[ M0.0 ]-----------------------( TON T1 PT=8s )----|
+;  |  MOTOR_ON                           STAR_TIMER        |
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 005 — Delta Contactor with Interlock (Day 2)
+;
+;  |----[ M0.0 ]----[ T1/DN ]----[/Q0.1]--------( Q0.2 )--|
+;  |  MOTOR_ON      TIMER DONE   KM_STAR          KM_DELTA |
+;  |                             (NC Interlock)            |
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 006 — Start Pulse (One-Shot for Counter)
+;
+;  |----[ I0.0 ]----[/M0.0 ]-------------------( M0.2 )---|
+;  |  PB_START      MOTOR OFF                  START_PULSE |
+;  |                (NC)                                   |
+;
+;  LOGIC:
+;  • M0.2 goes HIGH only when START is pressed AND
+;    motor is currently OFF (prevents double counting)
+;  • This gives a clean 1-pulse per start to the counter
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 007 — Run Cycle Counter CTU (Day 3)
+;
+;  |----[ M0.2 ]------------------------( CTU C1 PV=5 )---|
+;  |  START_PULSE                        RUN_COUNTER       |
+;
+;  LOGIC:
+;  • Each motor start → C1 increments
+;  • At C1.ACC = 5 → C1/DN HIGH → maintenance required
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 008 — Maintenance Required Flag
+;
+;  |----[ C1/DN ]---------------------------( M0.1 )-------|
+;  |  COUNTER DONE                      MAINT_REQUIRED     |
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 009 — Maintenance Reset
+;
+;  |----[ I0.3 ]----------------------------( RES C1 )-----|
+;  |  PB_RESET                            RESET COUNTER    |
+;
+;  |----[ I0.3 ]----------------------------( RES M0.1 )---|
+;  |  PB_RESET                          CLEAR MAINT FLAG   |
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  LADDER RUNG 010 — Indicator Lamps
+;
+;  Green  RUN     : |--[ M0.0 ]----------( Q0.3 )---------|
+;  Yellow STAR    : |--[ Q0.1 ]----------( Q0.4 )---------|
+;  Blue   DELTA   : |--[ Q0.2 ]----------( Q0.5 )---------|
+;  Orange MAINT   : |--[ M0.1 ]----------( Q0.6 )---------|
+;  Red    FAULT   : |--[/I0.2 ]----------( Q0.7 )---------|
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  COMPLETE OPERATION SEQUENCE
+;
+;  Start #1 → Star (0-8s) → Delta → Stop → C1.ACC = 1
+;  Start #2 → Star (0-8s) → Delta → Stop → C1.ACC = 2
+;  Start #3 → Star (0-8s) → Delta → Stop → C1.ACC = 3
+;  Start #4 → Star (0-8s) → Delta → Stop → C1.ACC = 4
+;  Start #5 → Star (0-8s) → Delta → Stop → C1.ACC = 5
+;             C1/DN = 1 → M0.1 = 1 → MAINT LAMP ON
+;             Motor LOCKED — cannot start!
+;  Maintenance → PB_RESET → C1 = 0, M0.1 = 0
+;  Start #6 → Motor available again ✅
+;
+; ═══════════════════════════════════════════════════════════
+;
+;  CONCEPTS REVISED TODAY
+;
+;  Day 1 → Seal-In Logic          (Rung 001)
+;  Day 2 → TON Timer Star-Delta   (Rungs 003, 004, 005)
+;  Day 3 → CTU Counter            (Rungs 006, 007, 008)
+;  New   → Maintenance Lockout    (Rung 001 + 008 + 009)
+;
+; ─── REAL-WORLD UPGRADES ────────────────────────────────────
+;
+;  → Send C1.ACC value to SCADA via Modbus register
+;  → HMI shows "X starts remaining before maintenance"
+;  → Add TOF timer — minimum off time between starts
+;  → Email/SMS alert via SCADA when maintenance due
+;
+; ============================================================
+;  END OF PROGRAM — Day 04 | Complete Revision | Mohit Belwal
+; ============================================================
