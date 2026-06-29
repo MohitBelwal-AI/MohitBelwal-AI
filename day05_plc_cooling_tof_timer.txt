@@ -1,0 +1,202 @@
+; ============================================================
+;  PROGRAM   : Motor Cooling Control with TOF Timer
+;  PLC       : Mitsubishi FX5U
+;  Software  : GX Works3
+;  Author    : Mohit Belwal | Day 05
+;  Concepts  : TOF Timer (Timer Off Delay), Cooling Fan
+;              Control, Motor Protection Logic
+; ============================================================
+
+; ─── WHY TOF TIMER? ─────────────────────────────────────────
+;
+;  TON (Day 2) = Delay before turning ON
+;  TOF         = Delay before turning OFF
+;
+;  Real use case:
+;  Motor stops → but it's still HOT inside
+;  Cooling fan must run for 3 more minutes after motor stops
+;  TOF timer keeps fan ON for 3 minutes after motor OFF
+;
+;  Without this → motor overheats → insulation damage → failure
+;  This is standard practice in all large industrial motors!
+;
+; ─── I/O TAG TABLE ──────────────────────────────────────────
+;
+;  INPUTS  (X)
+;  X0  →  PB_START        Start push button    (NO)
+;  X1  →  PB_STOP         Stop push button     (NC)
+;  X2  →  OL_RELAY        Overload relay       (NC)
+;  X3  →  TEMP_SENSOR     High temp sensor     (NO)
+;                          Activates when temp > 80°C
+;
+;  OUTPUTS (Y)
+;  Y0  →  KM_MAIN         Main contactor — Motor
+;  Y1  →  COOLING_FAN     Cooling fan motor
+;  Y2  →  RUN_LAMP        Green lamp  — motor running
+;  Y3  →  FAN_LAMP        Blue lamp   — fan running
+;  Y4  →  COOL_LAMP       Yellow lamp — cooling down phase
+;  Y5  →  FAULT_LAMP      Red lamp    — overload/overheat
+;
+;  TIMERS
+;  T0  →  STAR_TIMER      TON  PT=K80  (8s  Star→Delta)
+;  T1  →  COOLING_TIMER   TOF  PT=K1800 (3 min cooling)
+;
+;  MEMORY BITS
+;  M0  →  MOTOR_ON        Motor running flag
+;  M1  →  COOLING_MODE    Cooling down phase active
+;
+; ═══════════════════════════════════════════════════════════
+;  LADDER DIAGRAMS — Mitsubishi FX5U
+; ═══════════════════════════════════════════════════════════
+
+; ───────────────────────────────────────────────────────────
+;  RUNG 1 — Main Contactor (Seal-In)
+; ───────────────────────────────────────────────────────────
+
+   L+                                                        L-
+   ║                                                         ║
+   ╠──┤X0├──┬──┤/X1├──┤/X2├──┤/X3├─────────────────(Y0)──╣
+   ║ START  │  STOP   OL_RLY  TEMP                  KM_MAIN║
+   ║        │          (NC)   SENSOR                        ║
+   ║        │                 (NC)                          ║
+   ╠──┤Y0├──┘                                              ║
+   ║ SEAL-IN                                                ║
+   ║                                                        ║
+
+;  LOGIC:
+;  Normal start/stop + Overload + High Temp sensor
+;  If temp > 80°C → X3 activates → motor auto stops
+
+; ───────────────────────────────────────────────────────────
+;  RUNG 2 — Motor Running Flag
+; ───────────────────────────────────────────────────────────
+
+   ║                                                        ║
+   ╠──┤Y0├──────────────────────────────────────────(M0)──╣
+   ║ KM_MAIN                                     MOTOR_ON  ║
+   ║                                                        ║
+
+; ───────────────────────────────────────────────────────────
+;  RUNG 3 — Cooling Fan with TOF Timer
+;           Fan stays ON for 3 min after motor stops
+; ───────────────────────────────────────────────────────────
+
+   ║                                                        ║
+   ╠──┤M0├──────────────────────────────(OUT T1 K1800)────╣
+   ║ MOTOR                               COOLING TIMER TOF ║
+   ║  ON                                 3 MINUTES         ║
+   ║                                                        ║
+
+;  NOTE: K1800 = 1800 × 100ms = 180,000ms = 3 minutes
+;  TOF means: Timer starts counting DOWN when M0 goes OFF
+;  T1 contact stays ON during countdown
+
+; ───────────────────────────────────────────────────────────
+;  RUNG 4 — Cooling Fan Output
+; ───────────────────────────────────────────────────────────
+
+   ║                                                        ║
+   ╠──┤T1├──────────────────────────────────────────(Y1)──╣
+   ║ COOL                                       COOLING    ║
+   ║ TIMER                                        FAN      ║
+   ║                                                        ║
+
+;  LOGIC:
+;  Motor ON  → M0=1 → T1 contact=1 → Fan ON
+;  Motor OFF → M0=0 → T1 starts counting 3 min
+;              T1 contact stays 1 → Fan stays ON
+;  After 3 min → T1 contact=0 → Fan OFF
+;  Motor fully cooled down ✅
+
+; ───────────────────────────────────────────────────────────
+;  RUNG 5 — Cooling Mode Flag
+;           Active only when motor OFF but fan still running
+; ───────────────────────────────────────────────────────────
+
+   ║                                                        ║
+   ╠──┤T1├──┤/M0├───────────────────────────────────(M1)──╣
+   ║ TIMER   MOTOR                              COOLING    ║
+   ║  ON      OFF                                 MODE     ║
+   ║                                                        ║
+
+;  LOGIC:
+;  T1 ON + Motor OFF → Cooling mode active (M1=1)
+;  This means: fan running but motor is stopped
+
+; ───────────────────────────────────────────────────────────
+;  RUNG 6 — Indicator Lamps
+; ───────────────────────────────────────────────────────────
+
+   ║                                                        ║
+   ╠──┤M0├──────────────────────────────────────────(Y2)──╣
+   ║ MOTOR_ON                               RUN LAMP 🟢    ║
+   ║                                                        ║
+   ╠──┤Y1├──────────────────────────────────────────(Y3)──╣
+   ║ FAN ON                                 FAN LAMP 🔵    ║
+   ║                                                        ║
+   ╠──┤M1├──────────────────────────────────────────(Y4)──╣
+   ║ COOLING                              COOL LAMP 🟡     ║
+   ║  MODE                                                  ║
+   ║                                                        ║
+   ╠──┤/X2├─────────────────────────────────────────(Y5)──╣
+   ║ OL_RELAY                            FAULT LAMP 🔴     ║
+   ║   (NC)                                                 ║
+   ║                                                        ║
+
+; ───────────────────────────────────────────────────────────
+;  END
+; ───────────────────────────────────────────────────────────
+
+   ║                                                        ║
+   ╠────────────────────────────────────────────[END]──────╣
+   ╚════════════════════════════════════════════════════════╝
+
+; ═══════════════════════════════════════════════════════════
+;  TIMING DIAGRAM
+; ═══════════════════════════════════════════════════════════
+;
+;  Time  →    0s        Stop      Stop+3min
+;             |           |           |
+;  MOTOR(Y0)  |███████████|           |
+;  M0         |███████████|           |
+;  T1(TOF)    |███████████████████████|  ← stays ON 3 min
+;  FAN (Y1)   |███████████████████████|  ← stays ON 3 min
+;  COOL(M1)              |███████████|  ← only cooling phase
+;
+; ═══════════════════════════════════════════════════════════
+;  TON vs TOF Comparison
+; ═══════════════════════════════════════════════════════════
+;
+;  TON (Timer ON Delay)  — Day 2
+;  ┌─────────────────────────────────────┐
+;  │ Input  : ──────┐         └──────    │
+;  │ Timer  :       └──count──┘          │
+;  │ Output :             └──────────    │
+;  │ Use    : Star→Delta delay           │
+;  └─────────────────────────────────────┘
+;
+;  TOF (Timer OFF Delay) — Day 5
+;  ┌─────────────────────────────────────┐
+;  │ Input  : ──────┐         └──────    │
+;  │ Output : ──────────────────┘        │
+;  │ Timer  :            └──count──┘     │
+;  │ Use    : Cooling fan after stop     │
+;  └─────────────────────────────────────┘
+;
+; ═══════════════════════════════════════════════════════════
+;  GX Works3 — How to Add TOF Timer
+; ═══════════════════════════════════════════════════════════
+;
+;  1. Click on empty rung
+;  2. Add contact M0 (NO) — F5 → M0
+;  3. For TOF coil → press F7
+;  4. Type: OUT T1 K1800
+;  5. Press Enter
+;
+;  NOTE: In FX5U, TOF is entered as:
+;        OUT T1 K1800  (same as TON but logic is reversed)
+;        T1 contact stays ON until countdown finishes
+;
+; ============================================================
+;  END OF PROGRAM — Day 05 | TOF Cooling Timer | Mohit Belwal
+; ============================================================
