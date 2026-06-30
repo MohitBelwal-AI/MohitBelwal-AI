@@ -1,0 +1,197 @@
+; ============================================================
+;  PROGRAM   : Multi-Condition Motor Protection Relay
+;  PLC       : Mitsubishi FX5U
+;  Software  : GX Works3
+;  Author    : Mohit Belwal | Day 06
+;  Concepts  : AND logic (series contacts), OR logic
+;              (parallel contacts), NOT logic (NC contacts)
+;              — Ladder Logic equivalent of Python's
+;              and / or / not operators
+; ============================================================
+
+; ─── WHY THIS MATTERS ───────────────────────────────────────
+;
+;  In Python today: and, or, not — combine conditions
+;  In PLC ladder, SAME logic exists but looks different:
+;
+;  Python  AND   →  PLC: Contacts in SERIES   ──┤ ├──┤ ├──
+;  Python  OR    →  PLC: Contacts in PARALLEL  ──┬┤ ├┬──
+;                                                  └┤ ├┘
+;  Python  NOT   →  PLC: NC Contact            ──┤/├──
+;
+;  This is the EXACT same logic, just different language!
+;
+; ─── I/O TAG TABLE ──────────────────────────────────────────
+;
+;  INPUTS  (X)
+;  X0  →  PB_START         Start push button       (NO)
+;  X1  →  PB_STOP          Stop push button        (NC)
+;  X2  →  OL_RELAY         Overload relay trip     (NO — alarm contact)
+;  X3  →  EARTH_FAULT      Earth fault relay       (NO — alarm contact)
+;  X4  →  HIGH_TEMP        High temp sensor        (NO — alarm contact)
+;  X5  →  HIGH_VIBRATION   Vibration sensor        (NO — alarm contact)
+;  X6  →  PB_RESET         Fault reset button      (NO)
+;
+;  OUTPUTS (Y)
+;  Y0  →  KM_MAIN          Main contactor
+;  Y1  →  EMERGENCY_LAMP   Red flashing — emergency trip
+;  Y2  →  WARNING_LAMP     Yellow — warning condition
+;  Y3  →  RUN_LAMP         Green — normal running
+;
+;  MEMORY BITS
+;  M0  →  MOTOR_ON         Motor running flag
+;  M1  →  EMERGENCY_TRIP   Earth Fault AND Overload together
+;  M2  →  WARNING_COND     Temp OR Vibration high
+;  M3  →  FAULT_LATCH      Latched fault until reset
+;
+; ═══════════════════════════════════════════════════════════
+;  RUNG 1 — Emergency Trip Logic (AND condition)
+;           Python equivalent: earth_fault AND overload
+; ═══════════════════════════════════════════════════════════
+
+   L+                                                        L-
+   ║                                                         ║
+   ╠──┤X3├──┤X2├────────────────────────────────────(M1)───╣
+   ║ EARTH   OVER                              EMERGENCY    ║
+   ║ FAULT   LOAD                                TRIP       ║
+   ║                                                         ║
+   ║ ◄── SERIES contacts = AND logic ──►                    ║
+   ║     Both X3 AND X2 must be ON for M1 to activate       ║
+   ║                                                         ║
+
+;  PYTHON EQUIVALENT:
+;  if earth_fault and overload:
+;      emergency_trip = True
+
+; ═══════════════════════════════════════════════════════════
+;  RUNG 2 — Warning Condition Logic (OR condition)
+;           Python equivalent: high_temp OR high_vibration
+; ═══════════════════════════════════════════════════════════
+
+   ║                                                         ║
+   ╠──┤X4├──────────────────────────────────────────(M2)───╣
+   ║ HIGH                                       WARNING     ║
+   ║ TEMP             ┌──────────────────────────┘          ║
+   ║                  │                                      ║
+   ╠──┤X5├────────────┘                                     ║
+   ║ HIGH VIBRATION                                          ║
+   ║                                                          ║
+   ║ ◄── PARALLEL contacts = OR logic ──►                    ║
+   ║     EITHER X4 OR X5 ON activates M2                     ║
+   ║                                                          ║
+
+;  PYTHON EQUIVALENT:
+;  if high_temp or high_vibration:
+;      warning_condition = True
+
+; ═══════════════════════════════════════════════════════════
+;  RUNG 3 — Fault Latch (stays ON until manually reset)
+; ═══════════════════════════════════════════════════════════
+
+   ║                                                         ║
+   ╠──┤M1├──┬───────────────────────────────────────(M3)───╣
+   ║ EMERG  │                                   FAULT_LATCH ║
+   ║ TRIP   │                                                ║
+   ║        │                                                ║
+   ╠──┤M3├──┴──┤/X6├                                        ║
+   ║ LATCH      RESET                                        ║
+   ║            (NC)                                         ║
+   ║                                                          ║
+
+;  LOGIC:
+;  Once M1 (emergency) triggers → M3 latches ON
+;  Stays ON even if M1 goes false (fault cleared)
+;  Only X6 (reset button) can clear M3
+;  This is SAFETY CRITICAL — operator must acknowledge fault!
+
+; ═══════════════════════════════════════════════════════════
+;  RUNG 4 — Main Contactor with ALL Protection Conditions
+;           Python equivalent: Multiple AND + NOT combined
+; ═══════════════════════════════════════════════════════════
+
+   ║                                                          ║
+   ╠──┤X0├──┬──┤/X1├──┤/M3├──┤/M2├─────────────────(Y0)────╣
+   ║ START  │  STOP   FAULT   WARNING               KM_MAIN  ║
+   ║        │  (NC)   LATCH    (NC)                          ║
+   ║        │         (NC)                                    ║
+   ╠──┤Y0├──┘                                                ║
+   ║ SEAL-IN                                                  ║
+   ║                                                           ║
+
+;  PYTHON EQUIVALENT:
+;  if start and not stop and not fault_latch and not warning:
+;      motor_run = True
+;
+;  NOTE: Motor only runs if NONE of the fault conditions
+;        are active — this is "not X and not Y and not Z"
+;        written as multiple NC contacts in series
+
+; ═══════════════════════════════════════════════════════════
+;  RUNG 5 — Motor Running Flag
+; ═══════════════════════════════════════════════════════════
+
+   ║                                                          ║
+   ╠──┤Y0├──────────────────────────────────────────(M0)────╣
+   ║ KM_MAIN                                      MOTOR_ON    ║
+   ║                                                           ║
+
+; ═══════════════════════════════════════════════════════════
+;  RUNG 6 — Indicator Lamps
+; ═══════════════════════════════════════════════════════════
+
+   ║                                                           ║
+   ╠──┤M3├──────────────────────────────────────────(Y1)────╣
+   ║ FAULT LATCH                          EMERGENCY LAMP 🔴   ║
+   ║                                                           ║
+   ╠──┤M2├──┤/M3├───────────────────────────────────(Y2)────╣
+   ║ WARNING  NOT FAULT                    WARNING LAMP 🟡    ║
+   ║          (NC)                                            ║
+   ║                                                           ║
+   ╠──┤M0├──────────────────────────────────────────(Y3)────╣
+   ║ MOTOR_ON                                  RUN LAMP 🟢    ║
+   ║                                                           ║
+
+; ═══════════════════════════════════════════════════════════
+;  END
+; ═══════════════════════════════════════════════════════════
+
+   ║                                                           ║
+   ╠─────────────────────────────────────────────────[END]───╣
+   ╚═════════════════════════════════════════════════════════╝
+
+; ═══════════════════════════════════════════════════════════
+;  TRUTH TABLE — Logic Verification
+; ═══════════════════════════════════════════════════════════
+;
+;  ┌──────────┬─────────┬──────────┬───────────┬────────────┐
+;  │ Earth    │ Overload│ M1       │ Motor     │ Lamp       │
+;  │ Fault    │         │ Emergency│ Allowed?  │ Status     │
+;  ├──────────┼─────────┼──────────┼───────────┼────────────┤
+;  │   0      │   0     │    0     │   YES     │ Green      │
+;  │   1      │   0     │    0     │   YES     │ Green      │
+;  │   0      │   1     │    0     │   YES     │ Green      │
+;  │   1      │   1     │    1     │   NO       │ Red+Latch │
+;  └──────────┴─────────┴──────────┴───────────┴────────────┘
+;
+;  Note: M1 only activates when BOTH conditions are true (AND)
+;        This matches Python: if earth_fault and overload:
+;
+; ═══════════════════════════════════════════════════════════
+;  PYTHON vs PLC LOGIC — SIDE BY SIDE
+; ═══════════════════════════════════════════════════════════
+;
+;  PYTHON:                          PLC LADDER:
+;  ─────────────────────────        ─────────────────────────
+;  if a and b:                      ──┤a├──┤b├──( )──
+;      do_something()                  SERIES = AND
+;
+;  if a or b:                       ──┬┤a├┬──( )──
+;      do_something()                 └┤b├┘
+;                                      PARALLEL = OR
+;
+;  if not a:                        ──┤/a├──( )──
+;      do_something()                  NC CONTACT = NOT
+;
+; ============================================================
+;  END OF PROGRAM — Day 06 | Protection Relay | Mohit Belwal
+; ============================================================
