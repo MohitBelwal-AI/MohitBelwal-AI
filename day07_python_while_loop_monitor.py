@@ -3,7 +3,7 @@
 #  Author  : Mohit Belwal
 #  Domain  : Electrical Engineering & Industrial Automation
 #  Concepts: while loop, loop counter, break, continue,
-#            infinite loop with condition exit.
+#            infinite loop with condition exit
 #  Goal    : Simulate continuous plant monitoring using
 #            while loop — just like a real SCADA scan cycle
 # ============================================================
