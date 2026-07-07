@@ -1,0 +1,263 @@
+; ============================================================
+;  PROGRAM   : Sequential Motor Start — Step Control
+;  PLC       : Mitsubishi FX5U
+;  Software  : GX Works3
+;  Author    : Mohit Belwal | Day 07
+;  Concepts  : PLC equivalent of while loop —
+;              Step sequencer using counters + comparators
+;              Loop runs until condition becomes false
+; ============================================================
+
+; ─── WHY THIS MATTERS ───────────────────────────────────────
+;
+;  Python while loop:
+;  while condition == True:
+;      do something
+;      update counter
+;
+;  PLC equivalent:
+;  → Counter counts each scan cycle
+;  → Comparator checks condition every scan
+;  → Output active only while condition is true
+;  → Resets when condition false (loop ends)
+;
+;  Real use case:
+;  A plant has 4 motors. They must start ONE BY ONE
+;  with 5 second gap between each — to avoid power surge.
+;  Step counter goes 1 → 2 → 3 → 4 then stops.
+;  Just like: while step <= 4: start_motor(step)
+;
+; ─── I/O TAG TABLE ──────────────────────────────────────────
+;
+;  INPUTS  (X)
+;  X0  →  PB_START         Start sequence      (NO)
+;  X1  →  PB_STOP          Stop all motors     (NC)
+;  X2  →  OL_RELAY         Overload any motor  (NC)
+;  X3  →  PB_RESET         Reset sequence      (NO)
+;
+;  OUTPUTS (Y)
+;  Y0  →  MOTOR_1          Motor 1 contactor
+;  Y1  →  MOTOR_2          Motor 2 contactor
+;  Y2  →  MOTOR_3          Motor 3 contactor
+;  Y3  →  MOTOR_4          Motor 4 contactor
+;  Y4  →  SEQ_RUNNING      Sequence active lamp (Green)
+;  Y5  →  SEQ_COMPLETE     All motors ON lamp  (Blue)
+;  Y6  →  FAULT_LAMP       Fault lamp          (Red)
+;
+;  TIMERS
+;  T0  →  STEP_TIMER       TON PT=K50 (5 seconds between steps)
+;
+;  COUNTERS
+;  C0  →  STEP_COUNTER     CTU PV=4 (counts motor starts 1→4)
+;
+;  MEMORY BITS
+;  M0  →  SEQ_ON           Sequence running flag
+;  M1  →  STEP1_DONE       Motor 1 started
+;  M2  →  STEP2_DONE       Motor 2 started
+;  M3  →  STEP3_DONE       Motor 3 started
+;  M4  →  STEP4_DONE       Motor 4 started (all done)
+;  M5  →  TIMER_PULSE      One shot — step timer done pulse
+;
+; ═══════════════════════════════════════════════════════════
+;  PYTHON EQUIVALENT — For Reference
+; ═══════════════════════════════════════════════════════════
+;
+;  step = 0
+;  while step < 4:            ← C0 < K4 (comparator)
+;      start_motor(step+1)    ← Y0/Y1/Y2/Y3 based on step
+;      wait(5 seconds)        ← TON Timer T0 K50
+;      step = step + 1        ← CTU C0 counts up
+;
+; ═══════════════════════════════════════════════════════════
+;  LADDER DIAGRAMS
+; ═══════════════════════════════════════════════════════════
+
+; ───────────────────────────────────────────────────────────
+;  RUNG 1 — Sequence Start (Seal-In)
+;           while loop START condition
+; ───────────────────────────────────────────────────────────
+
+   L+                                                         L-
+   ║                                                          ║
+   ╠──┤X0├──┬──┤/X1├──┤/X2├──┤/C0├────────────────(M0)────╣
+   ║ START  │  STOP   OL_RLY  SEQ                  SEQ_ON   ║
+   ║        │          (NC)   DONE                          ║
+   ║        │                 (NC)                          ║
+   ╠──┤M0├──┘                                               ║
+   ║ SEAL-IN                                                 ║
+   ║                                                         ║
+
+;  PYTHON EQUIVALENT:
+;  while start and not stop and not fault and step < 4:
+;      seq_running = True
+
+; ───────────────────────────────────────────────────────────
+;  RUNG 2 — Step Timer (5 sec delay between each motor start)
+;           while loop "wait" equivalent
+; ───────────────────────────────────────────────────────────
+
+   ║                                                         ║
+   ╠──┤M0├──────────────────────────────(OUT T0 K50)────────╣
+   ║ SEQ_ON                              STEP TIMER          ║
+   ║                                     5 SECONDS           ║
+   ║                                                         ║
+
+; ───────────────────────────────────────────────────────────
+;  RUNG 3 — Step Counter (counts each motor start)
+;           while loop counter increment equivalent
+; ───────────────────────────────────────────────────────────
+
+   ║                                                         ║
+   ╠──┤T0├──────────────────────────────(OUT C0 K4)─────────╣
+   ║ TIMER                               STEP COUNTER        ║
+   ║  DONE                               MAX = 4             ║
+   ║                                                         ║
+
+;  PYTHON EQUIVALENT:
+;  step = step + 1   ← C0 increments each time T0 completes
+
+; ───────────────────────────────────────────────────────────
+;  RUNG 4 — Motor 1 Start (Step 0 — First scan)
+;           Starts immediately when sequence begins
+; ───────────────────────────────────────────────────────────
+
+   ║                                                         ║
+   ╠──┤M0├──┤/M1├───────────────────────────────────(Y0)───╣
+   ║ SEQ_ON  STEP1                                MOTOR_1   ║
+   ║         NOT DONE                                        ║
+   ║         (NC)                                            ║
+   ║                                                         ║
+   ╠──┤T0├──┤/M1├───────────────────────────────────(M1)───╣
+   ║ TIMER   STEP1                              STEP1_DONE  ║
+   ║  DONE   NOT DONE                                        ║
+   ║                                                         ║
+
+;  LOGIC: Motor 1 starts with sequence. After 5s → M1 latches.
+
+; ───────────────────────────────────────────────────────────
+;  RUNG 5 — Motor 2 Start (Step 1 — after 5 sec)
+; ───────────────────────────────────────────────────────────
+
+   ║                                                         ║
+   ╠──┤M1├──┤/M2├───────────────────────────────────(Y1)───╣
+   ║ STEP1   STEP2                                MOTOR_2   ║
+   ║  DONE   NOT DONE                                        ║
+   ║                                                         ║
+   ╠──┤M1├──┤T0├──┤/M2├────────────────────────────(M2)───╣
+   ║ STEP1  TIMER  STEP2                       STEP2_DONE  ║
+   ║  DONE   DONE  NOT DONE                                  ║
+   ║                                                         ║
+
+; ───────────────────────────────────────────────────────────
+;  RUNG 6 — Motor 3 Start (Step 2 — after 10 sec)
+; ───────────────────────────────────────────────────────────
+
+   ║                                                         ║
+   ╠──┤M2├──┤/M3├───────────────────────────────────(Y2)───╣
+   ║ STEP2   STEP3                                MOTOR_3   ║
+   ║  DONE   NOT DONE                                        ║
+   ║                                                         ║
+   ╠──┤M2├──┤T0├──┤/M3├────────────────────────────(M3)───╣
+   ║ STEP2  TIMER  STEP3                       STEP3_DONE  ║
+   ║  DONE   DONE  NOT DONE                                  ║
+   ║                                                         ║
+
+; ───────────────────────────────────────────────────────────
+;  RUNG 7 — Motor 4 Start (Step 3 — after 15 sec)
+; ───────────────────────────────────────────────────────────
+
+   ║                                                         ║
+   ╠──┤M3├──┤/M4├───────────────────────────────────(Y3)───╣
+   ║ STEP3   STEP4                                MOTOR_4   ║
+   ║  DONE   NOT DONE                                        ║
+   ║                                                         ║
+   ╠──┤M3├──┤T0├──┤/M4├────────────────────────────(M4)───╣
+   ║ STEP3  TIMER  STEP4                       STEP4_DONE  ║
+   ║  DONE   DONE  NOT DONE                                  ║
+   ║                                                         ║
+
+;  PYTHON EQUIVALENT (all 4 steps combined):
+;  step = 0
+;  while step < 4:
+;      motors[step].start()
+;      wait(5)
+;      step += 1    ← loop ends when step = 4
+
+; ───────────────────────────────────────────────────────────
+;  RUNG 8 — Reset Sequence
+; ───────────────────────────────────────────────────────────
+
+   ║                                                         ║
+   ╠──┤X3├──────────────────────────────────────(RST C0)───╣
+   ║ RESET                                   RESET COUNTER  ║
+   ║                                                         ║
+   ╠──┤X3├──────────────────────────────────────(RST M1)───╣
+   ║ RESET                                   CLEAR STEP1    ║
+   ║                                                         ║
+   ╠──┤X3├──────────────────────────────────────(RST M2)───╣
+   ║ RESET                                   CLEAR STEP2    ║
+   ║                                                         ║
+   ╠──┤X3├──────────────────────────────────────(RST M3)───╣
+   ║ RESET                                   CLEAR STEP3    ║
+   ║                                                         ║
+   ╠──┤X3├──────────────────────────────────────(RST M4)───╣
+   ║ RESET                                   CLEAR STEP4    ║
+   ║                                                         ║
+
+; ───────────────────────────────────────────────────────────
+;  RUNG 9 — Indicator Lamps
+; ───────────────────────────────────────────────────────────
+
+   ║                                                         ║
+   ╠──┤M0├──────────────────────────────────────────(Y4)───╣
+   ║ SEQ_ON                            SEQ RUNNING 🟢       ║
+   ║                                                         ║
+   ╠──┤C0├──────────────────────────────────────────(Y5)───╣
+   ║ ALL DONE                          SEQ COMPLETE 🔵      ║
+   ║                                                         ║
+   ╠──┤/X2├─────────────────────────────────────────(Y6)───╣
+   ║ OL_RELAY                              FAULT LAMP 🔴    ║
+   ║                                                         ║
+
+; ───────────────────────────────────────────────────────────
+;  END
+; ───────────────────────────────────────────────────────────
+
+   ║                                                         ║
+   ╠─────────────────────────────────────────────────[END]──╣
+   ╚═════════════════════════════════════════════════════════╝
+
+; ═══════════════════════════════════════════════════════════
+;  TIMING DIAGRAM
+; ═══════════════════════════════════════════════════════════
+;
+;  Time   →  0s    5s    10s   15s   20s
+;             |     |     |     |     |
+;  MOTOR_1    |████████████████████████|  (ON from step 1)
+;  MOTOR_2          |███████████████████|  (ON from step 2)
+;  MOTOR_3                |████████████|  (ON from step 3)
+;  MOTOR_4                      |██████|  (ON from step 4)
+;  SEQ_LAMP   |████████████████████|     (OFF when done)
+;  DONE_LAMP                     |██████|
+;
+; ═══════════════════════════════════════════════════════════
+;  PYTHON vs PLC — WHILE LOOP COMPARISON
+; ═══════════════════════════════════════════════════════════
+;
+;  PYTHON while loop          PLC Equivalent
+;  ─────────────────────      ──────────────────────────────
+;  while condition:           M0 (SEQ_ON) active while
+;                             C0 < K4 and no fault
+;
+;  do_something()             Y0/Y1/Y2/Y3 motor outputs
+;
+;  wait(5s)                   TON Timer T0 K50
+;
+;  counter += 1               CTU C0 increments on T0 done
+;
+;  loop exits when            C0 = K4 → C0/DN → M0 OFF
+;  condition false            (sequence complete, loop ends)
+;
+; ============================================================
+;  END OF PROGRAM — Day 07 | Sequential Start | Mohit Belwal
+; ============================================================
