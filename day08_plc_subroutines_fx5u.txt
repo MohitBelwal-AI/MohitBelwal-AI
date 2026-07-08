@@ -1,0 +1,282 @@
+; ============================================================
+;  PROGRAM   : Motor Control with Subroutines
+;  PLC       : Mitsubishi FX5U
+;  Software  : GX Works3
+;  Author    : Mohit Belwal | Day 08
+;  Concepts  : Subroutines (CALL/SRET) = Python Functions
+;              Subroutine calling Subroutine
+;              = Function calling Function
+; ============================================================
+
+; ─── WHY THIS MATTERS ───────────────────────────────────────
+;
+;  Python Functions:
+;  def motor_start():     → reusable block of code
+;      do_something()
+;
+;  PLC Subroutines (FX5U):
+;  CALL P1               → CALL instruction jumps to label P1
+;  [P1]                  → subroutine starts here
+;  SRET                  → subroutine ends, returns to main
+;
+;  SAME concept — different syntax!
+;
+;  Real use case:
+;  Plant has 3 motors. Each needs same protection checks.
+;  Instead of writing same logic 3 times (bad practice),
+;  write ONE subroutine → call it 3 times.
+;  Exactly like writing one function and calling it 3 times!
+;
+; ─── PROGRAM STRUCTURE ──────────────────────────────────────
+;
+;  MAIN PROGRAM
+;  ├── CALL P1  (Motor 1 control subroutine)
+;  ├── CALL P2  (Motor 2 control subroutine)
+;  ├── CALL P3  (Motor 3 control subroutine)
+;  └── CALL P10 (Alarm handler subroutine)
+;       └── CALL P11 (Fault logger — nested subroutine)
+;
+;  Python equivalent:
+;  def main():
+;      motor_control(1)
+;      motor_control(2)
+;      motor_control(3)
+;      alarm_handler()   → calls fault_logger() inside
+;
+; ─── I/O TAG TABLE ──────────────────────────────────────────
+;
+;  INPUTS  (X)
+;  X0  →  START_M1        Motor 1 start   (NO)
+;  X1  →  START_M2        Motor 2 start   (NO)
+;  X2  →  START_M3        Motor 3 start   (NO)
+;  X3  →  STOP_ALL        Stop all        (NC)
+;  X4  →  OL_M1           Motor 1 OL      (NC)
+;  X5  →  OL_M2           Motor 2 OL      (NC)
+;  X6  →  OL_M3           Motor 3 OL      (NC)
+;  X7  →  RESET           Fault reset     (NO)
+;
+;  OUTPUTS (Y)
+;  Y0  →  KM1             Motor 1 contactor
+;  Y1  →  KM2             Motor 2 contactor
+;  Y2  →  KM3             Motor 3 contactor
+;  Y3  →  ALARM_BUZZER    Common alarm buzzer
+;  Y4  →  FAULT_LAMP      Red fault lamp
+;
+;  MEMORY BITS
+;  M0  →  M1_FAULT        Motor 1 fault flag
+;  M1  →  M2_FAULT        Motor 2 fault flag
+;  M2  →  M3_FAULT        Motor 3 fault flag
+;  M3  →  ANY_FAULT       Any motor in fault
+;  M10 →  ALARM_LATCH     Alarm latched flag
+;
+; ═══════════════════════════════════════════════════════════
+;  MAIN PROGRAM — Calls subroutines like functions
+; ═══════════════════════════════════════════════════════════
+
+; ───────────────────────────────────────────────────────────
+;  RUNG 1 — Call Motor 1 Subroutine
+;           Python: motor_control(motor=1)
+; ───────────────────────────────────────────────────────────
+
+   L+                                                         L-
+   ║                                                          ║
+   ╠──┤X0├──────────────────────────────────────(CALL P1)───╣
+   ║ START_M1                              CALL MOTOR1 SUB   ║
+   ║                                                          ║
+
+; ───────────────────────────────────────────────────────────
+;  RUNG 2 — Call Motor 2 Subroutine
+; ───────────────────────────────────────────────────────────
+
+   ║                                                          ║
+   ╠──┤X1├──────────────────────────────────────(CALL P2)───╣
+   ║ START_M2                              CALL MOTOR2 SUB   ║
+   ║                                                          ║
+
+; ───────────────────────────────────────────────────────────
+;  RUNG 3 — Call Motor 3 Subroutine
+; ───────────────────────────────────────────────────────────
+
+   ║                                                          ║
+   ╠──┤X2├──────────────────────────────────────(CALL P3)───╣
+   ║ START_M3                              CALL MOTOR3 SUB   ║
+   ║                                                          ║
+
+; ───────────────────────────────────────────────────────────
+;  RUNG 4 — Call Alarm Handler (always active)
+;           Python: alarm_handler() called every scan
+; ───────────────────────────────────────────────────────────
+
+   ║                                                          ║
+   ╠─────────────────────────────────────────────(CALL P10)─╣
+   ║ (always ON — no contact needed)        CALL ALARM SUB   ║
+   ║                                                          ║
+
+; ───────────────────────────────────────────────────────────
+;  FEND — End of Main Program
+;         Subroutines written AFTER FEND
+; ───────────────────────────────────────────────────────────
+
+   ║                                                          ║
+   ╠──────────────────────────────────────────────[FEND]────╣
+   ║                      END OF MAIN PROGRAM                ║
+   ╚══════════════════════════════════════════════════════════╝
+
+; ═══════════════════════════════════════════════════════════
+;  SUBROUTINE P1 — Motor 1 Control
+;  Python equivalent: def motor1_control():
+; ═══════════════════════════════════════════════════════════
+
+   [P1]    ← Subroutine label (like def motor1_control():)
+
+   L+                                                         L-
+   ║                                                          ║
+   ╠──┤X0├──┬──┤/X3├──┤/X4├──────────────────────(Y0)──────╣
+   ║ START  │  STOP   OL_M1                       KM1        ║
+   ║   M1   │  (NC)   (NC)                                   ║
+   ╠──┤Y0├──┘                                                ║
+   ║ SEAL-IN                                                  ║
+   ║                                                          ║
+   ╠──┤/X4├─────────────────────────────────────────(M0)────╣
+   ║ OL_M1                                      M1_FAULT     ║
+   ║ (NC→NOT)                                                 ║
+   ║                                                          ║
+   ╠──────────────────────────────────────────────[SRET]────╣
+   ║                    RETURN to Main Program               ║
+   ╚══════════════════════════════════════════════════════════╝
+
+; ═══════════════════════════════════════════════════════════
+;  SUBROUTINE P2 — Motor 2 Control
+;  Python equivalent: def motor2_control():
+; ═══════════════════════════════════════════════════════════
+
+   [P2]
+
+   ║                                                          ║
+   ╠──┤X1├──┬──┤/X3├──┤/X5├──────────────────────(Y1)──────╣
+   ║ START  │  STOP   OL_M2                       KM2        ║
+   ║   M2   │  (NC)   (NC)                                   ║
+   ╠──┤Y1├──┘                                                ║
+   ║ SEAL-IN                                                  ║
+   ║                                                          ║
+   ╠──┤/X5├─────────────────────────────────────────(M1)────╣
+   ║ OL_M2                                      M2_FAULT     ║
+   ║                                                          ║
+   ╠──────────────────────────────────────────────[SRET]────╣
+   ╚══════════════════════════════════════════════════════════╝
+
+; ═══════════════════════════════════════════════════════════
+;  SUBROUTINE P3 — Motor 3 Control
+;  Python equivalent: def motor3_control():
+; ═══════════════════════════════════════════════════════════
+
+   [P3]
+
+   ║                                                          ║
+   ╠──┤X2├──┬──┤/X3├──┤/X6├──────────────────────(Y2)──────╣
+   ║ START  │  STOP   OL_M3                       KM3        ║
+   ║   M3   │  (NC)   (NC)                                   ║
+   ╠──┤Y2├──┘                                                ║
+   ║ SEAL-IN                                                  ║
+   ║                                                          ║
+   ╠──┤/X6├─────────────────────────────────────────(M2)────╣
+   ║ OL_M3                                      M3_FAULT     ║
+   ║                                                          ║
+   ╠──────────────────────────────────────────────[SRET]────╣
+   ╚══════════════════════════════════════════════════════════╝
+
+; ═══════════════════════════════════════════════════════════
+;  SUBROUTINE P10 — Alarm Handler
+;  Python equivalent: def alarm_handler():
+;  This subroutine calls ANOTHER subroutine (P11)
+;  = Function calling another function (recursion concept)
+; ═══════════════════════════════════════════════════════════
+
+   [P10]
+
+   ║                                                          ║
+   ╠──┤M0├──┬───────────────────────────────────────(M3)────╣
+   ║ M1_FLT │                                   ANY_FAULT   ║
+   ╠──┤M1├──┤                                               ║
+   ║ M2_FLT │                                               ║
+   ╠──┤M2├──┘                                               ║
+   ║ M3_FLT                                                  ║
+   ║                                                          ║
+   ╠──┤M3├──────────────────────────────────────(CALL P11)──╣
+   ║ ANY_FAULT                            CALL FAULT LOGGER  ║
+   ║                                                         ║
+   ╠──────────────────────────────────────────────[SRET]────╣
+   ╚══════════════════════════════════════════════════════════╝
+
+; ═══════════════════════════════════════════════════════════
+;  SUBROUTINE P11 — Fault Logger (called by P10)
+;  Python equivalent: def fault_logger(): called inside alarm_handler()
+;  This is NESTED function call — like recursion concept!
+; ═══════════════════════════════════════════════════════════
+
+   [P11]
+
+   ║                                                          ║
+   ╠──┤M3├──┬──────────────────────────────────────(M10)───╣
+   ║ FAULT  │                                 ALARM_LATCH   ║
+   ╠──┤M10├─┴──┤/X7├                                        ║
+   ║ LATCH       RESET                                       ║
+   ║             (NC)                                        ║
+   ║                                                          ║
+   ╠──┤M10├────────────────────────────────────────(Y3)─────╣
+   ║ ALARM_LATCH                              ALARM BUZZER   ║
+   ║                                                          ║
+   ╠──┤M10├────────────────────────────────────────(Y4)─────╣
+   ║ ALARM_LATCH                               FAULT LAMP    ║
+   ║                                                          ║
+   ╠──────────────────────────────────────────────[SRET]────╣
+   ╚══════════════════════════════════════════════════════════╝
+
+; ═══════════════════════════════════════════════════════════
+;  END OF ALL SUBROUTINES
+; ═══════════════════════════════════════════════════════════
+
+   ╠──────────────────────────────────────────────[END]─────╣
+
+; ═══════════════════════════════════════════════════════════
+;  PYTHON vs PLC — FUNCTIONS vs SUBROUTINES
+; ═══════════════════════════════════════════════════════════
+;
+;  PYTHON                        PLC FX5U
+;  ─────────────────────         ──────────────────────────
+;  def motor1():                 [P1] ← subroutine label
+;      # code here                   rungs here
+;      return                    [SRET] ← return
+;
+;  motor1()  ← call              CALL P1 ← call instruction
+;
+;  def main():                   MAIN PROGRAM
+;      motor1()                  ├── CALL P1
+;      motor2()                  ├── CALL P2
+;      alarm()                   └── CALL P10
+;          fault_log()               └── CALL P11 (nested)
+;
+;  Recursion concept:            Nested CALL:
+;  function calls itself         P10 calls P11
+;  or another function           subroutine calls subroutine
+;
+; ═══════════════════════════════════════════════════════════
+;  GX Works3 — How to Create Subroutines
+; ═══════════════════════════════════════════════════════════
+;
+;  1. Main program mein CALL P1 instruction:
+;     → F7 → type "CALL P1" → Enter
+;
+;  2. FEND instruction after main:
+;     → F7 → type "FEND" → Enter
+;
+;  3. New rung → type "P1" (label)
+;
+;  4. Write subroutine rungs
+;
+;  5. End with SRET:
+;     → F7 → type "SRET" → Enter
+;
+; ============================================================
+;  END OF FILE — Day 08 | Subroutines | Mohit Belwal
+; ============================================================
