@@ -1,0 +1,272 @@
+; ============================================================
+;  PROGRAM   : Motor Control using Function Blocks (FB)
+;  PLC       : Mitsubishi FX5U
+;  Software  : GX Works3
+;  Author    : Mohit Belwal | Day 10
+;  Concepts  : Function Blocks (FB) = Python Classes
+;              FB Instance = Python Object
+;              FB Variables = Instance Attributes
+;              FB Methods   = Class Methods
+; ============================================================
+
+; ─── WHY THIS MATTERS ───────────────────────────────────────
+;
+;  Python Class:
+;  class Motor:
+;      power_kw = 7.5       ← attribute
+;      def start(self):     ← method
+;          self.status = "Running"
+;
+;  PLC Function Block (FB):
+;  FUNCTION_BLOCK Motor_FB
+;      VAR
+;          power_kw : REAL;     ← attribute
+;          status   : BOOL;     ← attribute
+;      END_VAR
+;      (* start logic here *)   ← method (ladder inside FB)
+;  END_FUNCTION_BLOCK
+;
+;  Python Object:
+;  pump = Motor()           ← instantiation
+;  pump.start()             ← method call
+;
+;  PLC FB Instance:
+;  pump : Motor_FB          ← instantiation
+;  pump.EN := TRUE          ← method call (enable)
+;
+;  SAME CONCEPT — OOP exists in PLC too!
+;  IEC 61131-3 standard supports full OOP via FB
+;
+; ─── FUNCTION BLOCK DEFINITION ──────────────────────────────
+;
+;  FUNCTION_BLOCK Motor_FB
+;  (* This is the CLASS definition *)
+;
+;  VAR_INPUT
+;      EN_START    : BOOL;     ← start command input
+;      EN_STOP     : BOOL;     ← stop command input
+;      OL_TRIP     : BOOL;     ← overload relay
+;      STAR_PRESET : INT;      ← star timer preset (seconds)
+;  END_VAR
+;
+;  VAR_OUTPUT
+;      KM_MAIN  : BOOL;        ← main contactor output
+;      KM_STAR  : BOOL;        ← star contactor output
+;      KM_DELTA : BOOL;        ← delta contactor output
+;      FAULT    : BOOL;        ← fault status output
+;      RUNNING  : BOOL;        ← motor running status
+;  END_VAR
+;
+;  VAR
+;      (* Instance attributes — internal variables *)
+;      seal_in     : BOOL;     ← internal seal-in flag
+;      star_timer  : TON;      ← timer instance inside FB
+;      fault_latch : BOOL;     ← fault memory
+;  END_VAR
+;
+;  (* Ladder logic inside FB — the CLASS METHODS *)
+;  ...ladder rungs...
+;
+;  END_FUNCTION_BLOCK
+;
+; ─── I/O TAG TABLE ──────────────────────────────────────────
+;
+;  INPUTS  (X)
+;  X0  →  START_PUMP        Pump start button
+;  X1  →  STOP_PUMP         Pump stop button
+;  X2  →  OL_PUMP           Pump overload
+;  X3  →  START_CONV        Conveyor start button
+;  X4  →  STOP_CONV         Conveyor stop button
+;  X5  →  OL_CONV           Conveyor overload
+;  X6  →  START_COMP        Compressor start button
+;  X7  →  STOP_COMP         Compressor stop button
+;  X10 →  OL_COMP           Compressor overload
+;
+;  OUTPUTS (Y)
+;  Y0  →  KM_PUMP_MAIN      Pump main contactor
+;  Y1  →  KM_PUMP_STAR      Pump star contactor
+;  Y2  →  KM_PUMP_DELTA     Pump delta contactor
+;  Y3  →  KM_CONV_MAIN      Conveyor main contactor
+;  Y4  →  KM_COMP_MAIN      Compressor main contactor
+;  Y5  →  KM_COMP_STAR      Compressor star contactor
+;  Y6  →  KM_COMP_DELTA     Compressor delta contactor
+;  Y7  →  FAULT_LAMP        Common fault lamp
+;
+;  FB INSTANCES (Objects)
+;  PUMP_FB   : Motor_FB    ← pump = Motor()
+;  CONV_FB   : Motor_FB    ← conv = Motor()
+;  COMP_FB   : Motor_FB    ← comp = Motor()
+;
+;  TIMERS (inside FB — instance attributes)
+;  T0  →  PUMP_STAR_TIMER   Pump star timer    (8s)
+;  T1  →  COMP_STAR_TIMER   Compressor timer   (10s)
+;
+;  MEMORY (FB internal variables)
+;  M0  →  PUMP_RUNNING      Pump status
+;  M1  →  CONV_RUNNING      Conveyor status
+;  M2  →  COMP_RUNNING      Compressor status
+;  M10 →  PUMP_FAULT        Pump fault
+;  M11 →  CONV_FAULT        Conveyor fault
+;  M12 →  COMP_FAULT        Compressor fault
+;
+; ═══════════════════════════════════════════════════════════
+;  LADDER DIAGRAMS — Main Program
+;  (Each FB instance called like an object method)
+; ═══════════════════════════════════════════════════════════
+
+; ───────────────────────────────────────────────────────────
+;  PUMP MOTOR CONTROL
+;  Python: pump = Motor("Pump", 7.5)
+;          pump.start()
+; ───────────────────────────────────────────────────────────
+
+   L+                                                         L-
+   ║  PUMP MOTOR — MTR-001 (7.5 kW)                          ║
+   ╠──┤X0├──┬──┤/X1├──┤/X2├──┤/M10├───────────────(Y0)─────╣
+   ║ START  │  STOP   OL_RLY  FAULT               KM_PUMP   ║
+   ║  PUMP  │   (NC)   (NC)    (NC)                MAIN      ║
+   ╠──┤Y0├──┘                                               ║
+   ║ SEAL-IN                                                  ║
+   ║                                                          ║
+   ╠──┤Y0├──┤/T0├───────────────────────────────────(Y1)────╣
+   ║ PUMP    TIMER                               KM_PUMP     ║
+   ║  ON    NOT DONE                               STAR       ║
+   ║                                                          ║
+   ╠──┤Y0├──────────────────────────────(OUT T0 K80)─────────╣
+   ║ PUMP                                PUMP STAR TIMER     ║
+   ║  ON                                 8 SECONDS           ║
+   ║                                                          ║
+   ╠──┤Y0├──┤T0├──┤/Y1├────────────────────────────(Y2)─────╣
+   ║ PUMP   TIMER  STAR                          KM_PUMP     ║
+   ║  ON    DONE  INTLK                           DELTA       ║
+   ║                                                          ║
+   ╠──┤Y0├──────────────────────────────────────────(M0)─────╣
+   ║ KM_PUMP_MAIN                             PUMP_RUNNING   ║
+   ║                                                          ║
+   ╠──┤/X2├──────────────────────────────────────────(M10)──╣
+   ║ OL_PUMP                                   PUMP_FAULT    ║
+   ║  (NC)                                                    ║
+   ║                                                          ║
+
+; ───────────────────────────────────────────────────────────
+;  CONVEYOR MOTOR CONTROL
+;  Python: conv = Motor("Conveyor", 11.0)
+;          conv.start()
+;  NOTE: No star-delta needed for conveyor (DOL start)
+; ───────────────────────────────────────────────────────────
+
+   ║  CONVEYOR MOTOR — MTR-002 (11 kW)                       ║
+   ╠──┤X3├──┬──┤/X4├──┤/X5├──┤/M11├───────────────(Y3)─────╣
+   ║ START  │  STOP   OL_RLY  FAULT               KM_CONV   ║
+   ║  CONV  │   (NC)   (NC)    (NC)                MAIN      ║
+   ╠──┤Y3├──┘                                               ║
+   ║ SEAL-IN                                                  ║
+   ║                                                          ║
+   ╠──┤Y3├──────────────────────────────────────────(M1)─────╣
+   ║ KM_CONV_MAIN                             CONV_RUNNING   ║
+   ║                                                          ║
+   ╠──┤/X5├──────────────────────────────────────────(M11)──╣
+   ║ OL_CONV                                   CONV_FAULT    ║
+   ║  (NC)                                                    ║
+   ║                                                          ║
+
+; ───────────────────────────────────────────────────────────
+;  COMPRESSOR MOTOR CONTROL
+;  Python: comp = Motor("Compressor", 15.0)
+;          comp.start()
+;  NOTE: 10 second star timer (larger motor)
+; ───────────────────────────────────────────────────────────
+
+   ║  COMPRESSOR — MTR-003 (15 kW)                           ║
+   ╠──┤X6├──┬──┤/X7├──┤/X10├──┤/M12├──────────────(Y4)─────╣
+   ║ START  │  STOP   OL_RLY   FAULT             KM_COMP    ║
+   ║  COMP  │   (NC)   (NC)     (NC)               MAIN      ║
+   ╠──┤Y4├──┘                                               ║
+   ║ SEAL-IN                                                  ║
+   ║                                                          ║
+   ╠──┤Y4├──┤/T1├───────────────────────────────────(Y5)────╣
+   ║ COMP    TIMER                               KM_COMP     ║
+   ║  ON    NOT DONE                               STAR       ║
+   ║                                                          ║
+   ╠──┤Y4├──────────────────────────────(OUT T1 K100)────────╣
+   ║ COMP                                COMP STAR TIMER     ║
+   ║  ON                                 10 SECONDS          ║
+   ║                                                          ║
+   ╠──┤Y4├──┤T1├──┤/Y5├────────────────────────────(Y6)─────╣
+   ║ COMP   TIMER  STAR                          KM_COMP     ║
+   ║  ON    DONE  INTLK                           DELTA       ║
+   ║                                                          ║
+   ╠──┤Y4├──────────────────────────────────────────(M2)─────╣
+   ║ KM_COMP_MAIN                             COMP_RUNNING   ║
+   ║                                                          ║
+   ╠──┤/X10├─────────────────────────────────────────(M12)──╣
+   ║ OL_COMP                                   COMP_FAULT    ║
+   ║  (NC)                                                    ║
+   ║                                                          ║
+
+; ───────────────────────────────────────────────────────────
+;  COMMON FAULT LAMP
+;  Python: if any motor has fault → fault_lamp = True
+; ───────────────────────────────────────────────────────────
+
+   ║                                                          ║
+   ╠──┤M10├─┬───────────────────────────────────────(Y7)────╣
+   ║ PUMP   │                                  FAULT LAMP    ║
+   ║ FAULT  │                                    🔴           ║
+   ╠──┤M11├─┤                                               ║
+   ║ CONV   │                                               ║
+   ║ FAULT  │                                               ║
+   ╠──┤M12├─┘                                               ║
+   ║ COMP                                                     ║
+   ║ FAULT                                                    ║
+   ║                                                          ║
+
+; ───────────────────────────────────────────────────────────
+;  END
+; ───────────────────────────────────────────────────────────
+
+   ╠──────────────────────────────────────────────[END]─────╣
+   ╚═════════════════════════════════════════════════════════╝
+
+; ═══════════════════════════════════════════════════════════
+;  PYTHON OOP vs PLC FUNCTION BLOCKS — COMPARISON
+; ═══════════════════════════════════════════════════════════
+;
+;  PYTHON                          PLC FX5U / IEC 61131-3
+;  ──────────────────────          ──────────────────────────
+;  class Motor:                    FUNCTION_BLOCK Motor_FB
+;
+;  class attribute:                VAR global to all instances
+;  plant_name = "XYZ"              plant_name : STRING
+;
+;  instance attribute:             VAR inside FB
+;  self.power_kw = 7.5             power_kw : REAL
+;
+;  def start(self):                Ladder rung inside FB
+;      self.status = True          KM_MAIN coil
+;
+;  pump = Motor()                  pump : Motor_FB
+;  (object instantiation)          (FB instance declaration)
+;
+;  pump.start()                    pump.EN_START := TRUE
+;  (method call)                   (FB input activation)
+;
+;  self.status                     pump.RUNNING
+;  (instance attribute)            (FB output variable)
+;
+; ═══════════════════════════════════════════════════════════
+;  CLASS vs INSTANCE ATTRIBUTE in PLC
+; ═══════════════════════════════════════════════════════════
+;
+;  Class Attribute (shared):
+;  → Plant supply voltage 415V — same D register for all
+;  → D100 = 415 (global register, all motors use same)
+;
+;  Instance Attribute (unique per motor):
+;  → Pump timer T0, Compressor timer T1 — different timers
+;  → M0 = pump running, M1 = conv running (different bits)
+;  → Each motor has OWN status bit — like self.status
+;
+; ============================================================
+;  END OF FILE — Day 10 | OOP / Function Blocks | Mohit Belwal
+; ============================================================
